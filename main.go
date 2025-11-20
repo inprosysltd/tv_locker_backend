@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,42 +16,42 @@ import (
 )
 
 type Device struct {
-	ID              string    `json:"id"`
-	SerialNumber    string    `json:"serial_number"`
-	CustomerName    string    `json:"customer_name"`
-	PhoneNumber     string    `json:"phone_number"`
-	EMITerm         int       `json:"emi_term"`
-	EMIStartDate    time.Time `json:"emi_start_date"`
-	TermDuration    int       `json:"term_duration"` // 7, 15, or 30 days
-	IsActive        bool      `json:"is_active"`
-	IsLocked        bool      `json:"is_locked"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	SerialNumber string    `json:"serial_number"`
+	CustomerName string    `json:"customer_name"`
+	PhoneNumber  string    `json:"phone_number"`
+	EMITerm      int       `json:"emi_term"`
+	EMIStartDate time.Time `json:"emi_start_date"`
+	TermDuration int       `json:"term_duration"` // 7, 15, or 30 days
+	IsActive     bool      `json:"is_active"`
+	IsLocked     bool      `json:"is_locked"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type ActivationCode struct {
-	ID          string    `json:"id"`
-	DeviceID    string    `json:"device_id"`
-	Code        string    `json:"code"`
-	TermNumber  int       `json:"term_number"`
-	IsUsed      bool      `json:"is_used"`
-	UsedAt      *time.Time `json:"used_at,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID         string     `json:"id"`
+	DeviceID   string     `json:"device_id"`
+	Code       string     `json:"code"`
+	TermNumber int        `json:"term_number"`
+	IsUsed     bool       `json:"is_used"`
+	UsedAt     *time.Time `json:"used_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 type LockDate struct {
-	ID          string    `json:"id"`
-	DeviceID    string    `json:"device_id"`
-	LockDate    time.Time `json:"lock_date"`
-	IsLocked    bool      `json:"is_locked"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	DeviceID  string    `json:"device_id"`
+	LockDate  time.Time `json:"lock_date"`
+	IsLocked  bool      `json:"is_locked"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type RemoteLock struct {
-	ID          string    `json:"id"`
-	DeviceID    string    `json:"device_id"`
-	IsLocked    bool      `json:"is_locked"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+	DeviceID  string    `json:"device_id"`
+	IsLocked  bool      `json:"is_locked"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type RegisterDeviceRequest struct {
@@ -72,14 +73,14 @@ type TermWithLockDate struct {
 }
 
 type TermWithLockDateAndCode struct {
-	Term          int    `json:"term"`
-	LockDate      string `json:"lock_date"`
+	Term           int    `json:"term"`
+	LockDate       string `json:"lock_date"`
 	ActivationCode string `json:"activation_code"`
 }
 
 type ActivationResponse struct {
-	Success bool              `json:"success"`
-	Message string            `json:"message"`
+	Success bool               `json:"success"`
+	Message string             `json:"message"`
 	Terms   []TermWithLockDate `json:"terms,omitempty"`
 }
 
@@ -97,24 +98,27 @@ type UnlockRequest struct {
 }
 
 var db *sql.DB
+var dbOnce sync.Once
 
 func initDB() {
-	var err error
-	connStr := os.Getenv("DATABASE_URL")
-	if connStr == "" {
-		log.Fatal("DATABASE_URL environment variable is not set")
-	}
+	dbOnce.Do(func() {
+		var err error
+		connStr := os.Getenv("DATABASE_URL")
+		if connStr == "" {
+			log.Fatal("DATABASE_URL environment variable is not set")
+		}
 
-	db, err = sql.Open("postgres", connStr)
-	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
-	}
+		db, err = sql.Open("postgres", connStr)
+		if err != nil {
+			log.Fatal("Failed to connect to database:", err)
+		}
 
-	if err = db.Ping(); err != nil {
-		log.Fatal("Failed to ping database:", err)
-	}
+		if err = db.Ping(); err != nil {
+			log.Fatal("Failed to ping database:", err)
+		}
 
-	log.Println("Database connection established")
+		log.Println("Database connection established")
+	})
 }
 
 func generateActivationCode() string {
@@ -182,7 +186,7 @@ func registerDevice(w http.ResponseWriter, r *http.Request) {
 	// Generate activation codes and lock dates together
 	lockDates := calculateLockDates(emiStartDate, req.TermDuration, req.EMITerm)
 	termsWithDates := make([]TermWithLockDateAndCode, 0)
-	
+
 	for i := 1; i <= req.EMITerm; i++ {
 		code := generateActivationCode()
 		_, err = db.Exec(
@@ -194,7 +198,7 @@ func registerDevice(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to generate activation codes", http.StatusInternalServerError)
 			return
 		}
-		
+
 		// Insert lock date
 		lockDate := lockDates[i-1]
 		_, err = db.Exec(
@@ -206,11 +210,11 @@ func registerDevice(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to generate lock dates", http.StatusInternalServerError)
 			return
 		}
-		
+
 		// Add to terms array with activation code
 		termsWithDates = append(termsWithDates, TermWithLockDateAndCode{
-			Term:          i,
-			LockDate:      lockDate.Format("2006-01-02"),
+			Term:           i,
+			LockDate:       lockDate.Format("2006-01-02"),
 			ActivationCode: code,
 		})
 	}
@@ -225,10 +229,10 @@ func registerDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"success": true,
-		"message": "Device registered successfully",
+		"success":   true,
+		"message":   "Device registered successfully",
 		"device_id": deviceID,
-		"terms": termsWithDates,
+		"terms":     termsWithDates,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -281,17 +285,17 @@ func activateDevice(w http.ResponseWriter, r *http.Request) {
 	// Get terms with their corresponding lock dates
 	// Join activation_codes with lock_dates based on term_number order
 	termsWithDates := make([]TermWithLockDate, 0)
-	
+
 	// Get terms ordered by term_number
 	termRows, err := db.Query("SELECT term_number FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
 	if err == nil {
 		defer termRows.Close()
-		
+
 		// Get lock dates ordered by lock_date
 		lockRows, err := db.Query("SELECT lock_date FROM lock_dates WHERE device_id = $1 ORDER BY lock_date", deviceID)
 		if err == nil {
 			defer lockRows.Close()
-			
+
 			lockDates := make([]time.Time, 0)
 			for lockRows.Next() {
 				var lockDate time.Time
@@ -299,7 +303,7 @@ func activateDevice(w http.ResponseWriter, r *http.Request) {
 					lockDates = append(lockDates, lockDate)
 				}
 			}
-			
+
 			// Match terms with lock dates by index
 			termIndex := 0
 			for termRows.Next() {
@@ -358,17 +362,17 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 
 	// Get terms with their corresponding lock dates
 	termsWithDates := make([]TermWithLockDate, 0)
-	
+
 	// Get terms ordered by term_number
 	termRows, err := db.Query("SELECT term_number FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
 	if err == nil {
 		defer termRows.Close()
-		
+
 		// Get lock dates ordered by lock_date
 		lockRows, err := db.Query("SELECT lock_date FROM lock_dates WHERE device_id = $1 ORDER BY lock_date", deviceID)
 		if err == nil {
 			defer lockRows.Close()
-			
+
 			lockDates := make([]time.Time, 0)
 			for lockRows.Next() {
 				var lockDate time.Time
@@ -376,7 +380,7 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 					lockDates = append(lockDates, lockDate)
 				}
 			}
-			
+
 			// Match terms with lock dates by index
 			termIndex := 0
 			for termRows.Next() {
@@ -445,8 +449,8 @@ func setRemoteLock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"success": true,
-		"message": fmt.Sprintf("Remote lock set to %v", req.IsLocked),
+		"success":   true,
+		"message":   fmt.Sprintf("Remote lock set to %v", req.IsLocked),
 		"is_locked": req.IsLocked,
 	}
 
@@ -550,10 +554,45 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func main() {
-	// Load environment variables (optional, for local development)
-	// godotenv.Load()
+// Handler is the entry point for Vercel serverless functions
+func Handler(w http.ResponseWriter, r *http.Request) {
+	// Initialize database connection (only once)
+	initDB()
 
+	// Create router
+	router := mux.NewRouter()
+
+	// API routes
+	router.HandleFunc("/api/health", healthCheck).Methods("GET")
+	router.HandleFunc("/api/register", registerDevice).Methods("POST")
+	router.HandleFunc("/api/activate", activateDevice).Methods("POST")
+	router.HandleFunc("/api/check", checkActivation).Methods("GET")
+	router.HandleFunc("/api/remote-lock", setRemoteLock).Methods("POST")
+	router.HandleFunc("/api/check-lock", checkRemoteLock).Methods("GET")
+	router.HandleFunc("/api/unlock", unlockDevice).Methods("POST")
+
+	// CORS middleware
+	corsMiddleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	handler := corsMiddleware(router)
+	handler.ServeHTTP(w, r)
+}
+
+// main function for local development
+func main() {
 	initDB()
 	defer db.Close()
 
@@ -594,4 +633,3 @@ func main() {
 	log.Printf("Server starting on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
-
