@@ -256,7 +256,6 @@ vercel
 
 4. **Unlock**: Unlocks device and deactivates it
 
-
 ## Notes
 
 - Term duration must be 7, 15, or 30 days
