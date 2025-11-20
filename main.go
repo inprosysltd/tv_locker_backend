@@ -99,26 +99,39 @@ type UnlockRequest struct {
 
 var db *sql.DB
 var dbOnce sync.Once
+var dbInitError error
 
-func initDB() {
+func initDB() error {
 	dbOnce.Do(func() {
-		var err error
 		connStr := os.Getenv("DATABASE_URL")
 		if connStr == "" {
-			log.Fatal("DATABASE_URL environment variable is not set")
+			dbInitError = fmt.Errorf("DATABASE_URL environment variable is not set")
+			log.Println("ERROR:", dbInitError.Error())
+			return
 		}
 
+		var err error
 		db, err = sql.Open("postgres", connStr)
 		if err != nil {
-			log.Fatal("Failed to connect to database:", err)
+			dbInitError = fmt.Errorf("Failed to connect to database: %v", err)
+			log.Println("ERROR:", dbInitError.Error())
+			return
 		}
 
+		// Set connection pool settings for serverless
+		db.SetMaxOpenConns(5)
+		db.SetMaxIdleConns(2)
+		db.SetConnMaxLifetime(5 * time.Minute)
+
 		if err = db.Ping(); err != nil {
-			log.Fatal("Failed to ping database:", err)
+			dbInitError = fmt.Errorf("Failed to ping database: %v", err)
+			log.Println("ERROR:", dbInitError.Error())
+			return
 		}
 
 		log.Println("Database connection established")
 	})
+	return dbInitError
 }
 
 func generateActivationCode() string {
@@ -557,7 +570,26 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
 // Handler is the entry point for Vercel serverless functions
 func Handler(w http.ResponseWriter, r *http.Request) {
 	// Initialize database connection (only once)
-	initDB()
+	if err := initDB(); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "Database connection failed",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Check if database is nil (shouldn't happen, but safety check)
+	if db == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "Database not initialized",
+			"message": "Database connection is not available",
+		})
+		return
+	}
 
 	// Create router
 	router := mux.NewRouter()
@@ -570,6 +602,24 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	router.HandleFunc("/api/remote-lock", setRemoteLock).Methods("POST")
 	router.HandleFunc("/api/check-lock", checkRemoteLock).Methods("GET")
 	router.HandleFunc("/api/unlock", unlockDevice).Methods("POST")
+
+	// Recovery middleware to catch panics
+	recoveryMiddleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if err := recover(); err != nil {
+					log.Printf("Panic recovered: %v", err)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"error":   "Internal server error",
+						"message": "An unexpected error occurred",
+					})
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
 
 	// CORS middleware
 	corsMiddleware := func(next http.Handler) http.Handler {
@@ -587,6 +637,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	handler := corsMiddleware(router)
+	handler := recoveryMiddleware(corsMiddleware(router))
 	handler.ServeHTTP(w, r)
 }

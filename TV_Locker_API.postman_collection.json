@@ -1,0 +1,213 @@
+{
+	"info": {
+		"_postman_id": "tv-locker-api-collection",
+		"name": "TV Locker Backend API",
+		"description": "API collection for TV Locker Backend Management System",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "TV App API",
+			"item": [
+				{
+					"name": "Activate Device",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"activation_code\": \"abc12345\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/activate",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"activate"
+							]
+						},
+						"description": "Activate a device using activation code. Returns terms and lock dates."
+					},
+					"response": []
+				},
+				{
+					"name": "Check Activation Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/check?serial_number=TV123456789",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"check"
+							],
+							"query": [
+								{
+									"key": "serial_number",
+									"value": "TV123456789",
+									"description": "TV serial number"
+								}
+							]
+						},
+						"description": "Check if device is activated and get terms/lock dates. TV should call this to get current activation status."
+					},
+					"response": []
+				},
+				{
+					"name": "Check Remote Lock Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/check-lock?serial_number=TV123456789",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"check-lock"
+							],
+							"query": [
+								{
+									"key": "serial_number",
+									"value": "TV123456789",
+									"description": "TV serial number"
+								}
+							]
+						},
+						"description": "Check if TV is remotely locked. TV should call this when it turns on to check if it should lock itself."
+					},
+					"response": []
+				},
+				{
+					"name": "Unlock Device",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"serial_number\": \"TV123456789\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/unlock",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"unlock"
+							]
+						},
+						"description": "Unlock device and deactivate it. Used for uninstall/unroll."
+					},
+					"response": []
+				}
+			],
+			"description": "APIs that the TV application will call"
+		},
+		{
+			"name": "Admin API",
+			"item": [
+				{
+					"name": "Register Device",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"serial_number\": \"TV123456789\",\n  \"customer_name\": \"John Doe\",\n  \"phone_number\": \"+1234567890\",\n  \"emi_term\": 9,\n  \"emi_start_date\": \"2024-01-01\",\n  \"term_duration\": 15\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/register",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"register"
+							]
+						},
+						"description": "Register a new device with customer information. Generates activation codes and lock dates."
+					},
+					"response": []
+				},
+				{
+					"name": "Set Remote Lock",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"serial_number\": \"TV123456789\",\n  \"is_locked\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/remote-lock",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"remote-lock"
+							]
+						},
+						"description": "Lock or unlock TV remotely. Works even when TV is off. When TV turns on, it will check this status and lock itself if needed."
+					},
+					"response": []
+				},
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/health",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"health"
+							]
+						},
+						"description": "Check if the API is running and healthy."
+					},
+					"response": []
+				}
+			],
+			"description": "APIs for admin/management operations"
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://tv-locker-backend-one.vercel.app",
+			"type": "string"
+		}
+	]
+}
+
