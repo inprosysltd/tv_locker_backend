@@ -256,6 +256,7 @@ vercel
 
 4. **Unlock**: Unlocks device and deactivates it
 
+
 ## Notes
 
 - Term duration must be 7, 15, or 30 days
@@ -263,4 +264,3 @@ vercel
 - Lock dates are calculated from EMI start date
 - Remote locks persist even when TV is off
 - TV should periodically check lock status when powered on
-
