@@ -84,7 +84,7 @@ Register a new device with customer information.
 ### 2. Activate Device
 **POST** `/api/activate`
 
-Activate a device using activation code. Marks the activation code as used and activates the device.
+Activate a device using activation code. Marks the activation code as used (expires it) and activates the device. **Each activation code can only be used once - after use, it expires permanently.**
 
 **Request Body:**
 ```json
@@ -102,19 +102,26 @@ Activate a device using activation code. Marks the activation code as used and a
     {
       "term": 1,
       "lock_date": "2024-01-16",
-      "activation_code": "abc12345"
+      "activation_code": "abc12345",
+      "is_expired": false,
+      "is_used": false
     },
     {
       "term": 2,
       "lock_date": "2024-01-31",
-      "activation_code": "def67890"
-    },
-    {
-      "term": 3,
-      "lock_date": "2024-02-15",
-      "activation_code": "ghi11223"
+      "activation_code": "def67890",
+      "is_expired": true,
+      "is_used": true,
+      "used_at": "2024-01-15 10:30:00"
     }
   ]
+}
+```
+
+**Error Response (if code already used):**
+```json
+{
+  "error": "Activation code has already been used and is now expired"
 }
 ```
 
@@ -132,23 +139,26 @@ Check device status and get terms/lock dates. **Automatically activates the devi
     {
       "term": 1,
       "lock_date": "2024-01-16",
-      "activation_code": "abc12345"
+      "activation_code": "abc12345",
+      "is_expired": false,
+      "is_used": false
     },
     {
       "term": 2,
       "lock_date": "2024-01-31",
-      "activation_code": "def67890"
-    },
-    {
-      "term": 3,
-      "lock_date": "2024-02-15",
-      "activation_code": "ghi11223"
+      "activation_code": "def67890",
+      "is_expired": true,
+      "is_used": true,
+      "used_at": "2024-01-15 10:30:00"
     }
   ]
 }
 ```
 
-**Note:** This endpoint automatically activates the device when called, so the TV doesn't need a separate activation step.
+**Note:** 
+- This endpoint automatically activates the device when called, so the TV doesn't need a separate activation step.
+- Each activation code can only be used once. After use, it expires (`is_expired: true`) and cannot be used again.
+- The `used_at` field shows when the activation code was used.
 
 ### 4. Set Remote Lock
 **POST** `/api/remote-lock`
@@ -215,6 +225,66 @@ Check if the API is running.
   "status": "ok"
 }
 ```
+
+### 8. Get All Devices (Admin)
+**GET** `/api/admin/devices`
+
+Get all registered devices with complete details. This endpoint is for admin panel to view all TV devices.
+
+**Response:**
+```json
+{
+  "success": true,
+  "total": 2,
+  "devices": [
+    {
+      "id": "uuid",
+      "serial_number": "TV123456789",
+      "customer_name": "John Doe",
+      "phone_number": "+1234567890",
+      "emi_term": 9,
+      "emi_start_date": "2024-01-01",
+      "term_duration": 15,
+      "is_active": true,
+      "is_locked": false,
+      "remote_locked": false,
+      "created_at": "2024-01-01 10:30:00",
+      "total_terms": 9,
+      "used_activation_codes": 1,
+      "remaining_activation_codes": 8,
+      "terms": [
+        {
+          "term": 1,
+          "lock_date": "2024-01-16",
+          "activation_code": "abc12345"
+        },
+        {
+          "term": 2,
+          "lock_date": "2024-01-31",
+          "activation_code": "def67890"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Response Fields:**
+- `id`: Device unique identifier
+- `serial_number`: TV serial number
+- `customer_name`: Customer name
+- `phone_number`: Customer phone number
+- `emi_term`: Total number of EMI terms
+- `emi_start_date`: EMI start date (YYYY-MM-DD)
+- `term_duration`: Term duration in days (7, 15, or 30)
+- `is_active`: Whether device is activated
+- `is_locked`: Whether device is currently locked
+- `remote_locked`: Whether device is remotely locked
+- `created_at`: Device registration timestamp
+- `total_terms`: Total number of terms
+- `used_activation_codes`: Number of activation codes that have been used
+- `remaining_activation_codes`: Number of unused activation codes
+- `terms`: Array of all terms with lock dates and activation codes
 
 ## Local Development
 
@@ -286,13 +356,14 @@ vercel
 - TV should periodically check lock status when powered on using `/api/check-lock`
 - `/api/check` endpoint automatically activates devices when called - no separate activation needed
 - All endpoints return activation codes along with terms and lock dates for TV reference
+- **Activation Code Expiration**: Each activation code can only be used once. After use, it expires permanently and cannot be reused. Attempting to use an expired code will return an error.
 
 ## Postman Collection
 
 A Postman collection is included in `TV_Locker_API.postman_collection.json` with:
 - **Global variable**: `baseUrl` set to your Vercel deployment URL
 - **TV App API folder**: Endpoints for TV application (check status, check lock, unlock)
-- **Admin API folder**: Endpoints for admin operations (register device, remote lock, health check)
+- **Admin API folder**: Endpoints for admin operations (register device, remote lock, get all devices, health check)
 
 To import:
 1. Open Postman

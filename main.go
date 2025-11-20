@@ -73,9 +73,12 @@ type TermWithLockDate struct {
 }
 
 type TermWithLockDateAndCode struct {
-	Term           int    `json:"term"`
-	LockDate       string `json:"lock_date"`
-	ActivationCode string `json:"activation_code"`
+	Term           int     `json:"term"`
+	LockDate       string  `json:"lock_date"`
+	ActivationCode string  `json:"activation_code"`
+	IsExpired      bool    `json:"is_expired"`
+	IsUsed         bool    `json:"is_used"`
+	UsedAt         *string `json:"used_at,omitempty"`
 }
 
 type ActivationResponse struct {
@@ -95,6 +98,30 @@ type CheckLockResponse struct {
 
 type UnlockRequest struct {
 	SerialNumber string `json:"serial_number"`
+}
+
+type AdminDeviceResponse struct {
+	ID                       string                    `json:"id"`
+	SerialNumber             string                    `json:"serial_number"`
+	CustomerName             string                    `json:"customer_name"`
+	PhoneNumber              string                    `json:"phone_number"`
+	EMITerm                  int                       `json:"emi_term"`
+	EMIStartDate             string                    `json:"emi_start_date"`
+	TermDuration             int                       `json:"term_duration"`
+	IsActive                 bool                      `json:"is_active"`
+	IsLocked                 bool                      `json:"is_locked"`
+	RemoteLocked             bool                      `json:"remote_locked"`
+	CreatedAt                string                    `json:"created_at"`
+	Terms                    []TermWithLockDateAndCode `json:"terms"`
+	TotalTerms               int                       `json:"total_terms"`
+	UsedActivationCodes      int                       `json:"used_activation_codes"`
+	RemainingActivationCodes int                       `json:"remaining_activation_codes"`
+}
+
+type AdminDevicesResponse struct {
+	Success bool                  `json:"success"`
+	Total   int                   `json:"total"`
+	Devices []AdminDeviceResponse `json:"devices"`
 }
 
 var db *sql.DB
@@ -233,11 +260,13 @@ func registerDevice(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Add to terms array with activation code
+		// Add to terms array with activation code (new codes are not expired)
 		termsWithDates = append(termsWithDates, TermWithLockDateAndCode{
 			Term:           i,
 			LockDate:       lockDate.Format("2006-01-02"),
 			ActivationCode: code,
+			IsExpired:      false,
+			IsUsed:         false,
 		})
 	}
 
@@ -277,12 +306,19 @@ func activateDevice(w http.ResponseWriter, r *http.Request) {
 	var deviceID string
 	var activationCodeID string
 	var termNumber int
+	var isUsed bool
 	err := db.QueryRow(
-		"SELECT ac.id, ac.device_id, ac.term_number FROM activation_codes ac WHERE ac.code = $1 AND ac.is_used = false",
+		"SELECT ac.id, ac.device_id, ac.term_number, ac.is_used FROM activation_codes ac WHERE ac.code = $1",
 		req.ActivationCode,
-	).Scan(&activationCodeID, &deviceID, &termNumber)
+	).Scan(&activationCodeID, &deviceID, &termNumber, &isUsed)
 	if err != nil {
-		http.Error(w, "Invalid or already used activation code", http.StatusBadRequest)
+		http.Error(w, "Invalid activation code", http.StatusBadRequest)
+		return
+	}
+
+	// Check if activation code is already used/expired
+	if isUsed {
+		http.Error(w, "Activation code has already been used and is now expired", http.StatusBadRequest)
 		return
 	}
 
@@ -308,7 +344,7 @@ func activateDevice(w http.ResponseWriter, r *http.Request) {
 	termsWithDates := make([]TermWithLockDateAndCode, 0)
 
 	// Get activation codes with term numbers ordered by term_number
-	codeRows, err := db.Query("SELECT term_number, code FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
+	codeRows, err := db.Query("SELECT term_number, code, is_used, used_at FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
 	if err == nil {
 		defer codeRows.Close()
 
@@ -317,13 +353,23 @@ func activateDevice(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			defer lockRows.Close()
 
-			// Store activation codes by term number
-			codesByTerm := make(map[int]string)
+			// Store activation codes by term number with usage info
+			codesByTerm := make(map[int]struct {
+				code   string
+				isUsed bool
+				usedAt *time.Time
+			})
 			for codeRows.Next() {
 				var termNumber int
 				var code string
-				if err := codeRows.Scan(&termNumber, &code); err == nil {
-					codesByTerm[termNumber] = code
+				var isUsed bool
+				var usedAt *time.Time
+				if err := codeRows.Scan(&termNumber, &code, &isUsed, &usedAt); err == nil {
+					codesByTerm[termNumber] = struct {
+						code   string
+						isUsed bool
+						usedAt *time.Time
+					}{code: code, isUsed: isUsed, usedAt: usedAt}
 				}
 			}
 
@@ -347,11 +393,19 @@ func activateDevice(w http.ResponseWriter, r *http.Request) {
 				if err := lockRows.Scan(&lockDate); err == nil {
 					if termIndex < len(termNumbers) {
 						termNumber := termNumbers[termIndex]
-						code := codesByTerm[termNumber]
+						codeInfo := codesByTerm[termNumber]
+						var usedAtStr *string
+						if codeInfo.usedAt != nil {
+							formatted := codeInfo.usedAt.Format("2006-01-02 15:04:05")
+							usedAtStr = &formatted
+						}
 						termsWithDates = append(termsWithDates, TermWithLockDateAndCode{
 							Term:           termNumber,
 							LockDate:       lockDate.Format("2006-01-02"),
-							ActivationCode: code,
+							ActivationCode: codeInfo.code,
+							IsExpired:      codeInfo.isUsed,
+							IsUsed:         codeInfo.isUsed,
+							UsedAt:         usedAtStr,
 						})
 						termIndex++
 					}
@@ -410,7 +464,7 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 	termsWithDates := make([]TermWithLockDateAndCode, 0)
 
 	// Get activation codes with term numbers ordered by term_number
-	codeRows, err := db.Query("SELECT term_number, code FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
+	codeRows, err := db.Query("SELECT term_number, code, is_used, used_at FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
 	if err == nil {
 		defer codeRows.Close()
 
@@ -419,13 +473,23 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			defer lockRows.Close()
 
-			// Store activation codes by term number
-			codesByTerm := make(map[int]string)
+			// Store activation codes by term number with usage info
+			codesByTerm := make(map[int]struct {
+				code   string
+				isUsed bool
+				usedAt *time.Time
+			})
 			for codeRows.Next() {
 				var termNumber int
 				var code string
-				if err := codeRows.Scan(&termNumber, &code); err == nil {
-					codesByTerm[termNumber] = code
+				var isUsed bool
+				var usedAt *time.Time
+				if err := codeRows.Scan(&termNumber, &code, &isUsed, &usedAt); err == nil {
+					codesByTerm[termNumber] = struct {
+						code   string
+						isUsed bool
+						usedAt *time.Time
+					}{code: code, isUsed: isUsed, usedAt: usedAt}
 				}
 			}
 
@@ -449,11 +513,19 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 				if err := lockRows.Scan(&lockDate); err == nil {
 					if termIndex < len(termNumbers) {
 						termNumber := termNumbers[termIndex]
-						code := codesByTerm[termNumber]
+						codeInfo := codesByTerm[termNumber]
+						var usedAtStr *string
+						if codeInfo.usedAt != nil {
+							formatted := codeInfo.usedAt.Format("2006-01-02 15:04:05")
+							usedAtStr = &formatted
+						}
 						termsWithDates = append(termsWithDates, TermWithLockDateAndCode{
 							Term:           termNumber,
 							LockDate:       lockDate.Format("2006-01-02"),
-							ActivationCode: code,
+							ActivationCode: codeInfo.code,
+							IsExpired:      codeInfo.isUsed,
+							IsUsed:         codeInfo.isUsed,
+							UsedAt:         usedAtStr,
 						})
 						termIndex++
 					}
@@ -613,6 +685,154 @@ func unlockDevice(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+func getAllDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get all devices
+	rows, err := db.Query(`
+		SELECT d.id, d.serial_number, d.customer_name, d.phone_number, 
+		       d.emi_term, d.emi_start_date, d.term_duration, 
+		       d.is_active, d.is_locked, d.created_at,
+		       COALESCE(rl.is_locked, false) as remote_locked
+		FROM devices d
+		LEFT JOIN remote_locks rl ON d.id = rl.device_id
+		ORDER BY d.created_at DESC
+	`)
+	if err != nil {
+		log.Printf("Error fetching devices: %v", err)
+		http.Error(w, "Failed to fetch devices", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	devices := make([]AdminDeviceResponse, 0)
+
+	for rows.Next() {
+		var device AdminDeviceResponse
+		var emiStartDate time.Time
+		var createdAt time.Time
+
+		err := rows.Scan(
+			&device.ID, &device.SerialNumber, &device.CustomerName, &device.PhoneNumber,
+			&device.EMITerm, &emiStartDate, &device.TermDuration,
+			&device.IsActive, &device.IsLocked, &createdAt,
+			&device.RemoteLocked,
+		)
+		if err != nil {
+			log.Printf("Error scanning device: %v", err)
+			continue
+		}
+
+		device.EMIStartDate = emiStartDate.Format("2006-01-02")
+		device.CreatedAt = createdAt.Format("2006-01-02 15:04:05")
+
+		// Get terms with lock dates and activation codes
+		termsWithDates := make([]TermWithLockDateAndCode, 0)
+
+		codeRows, err := db.Query(`
+			SELECT ac.term_number, ac.code, ac.is_used 
+			FROM activation_codes ac 
+			WHERE ac.device_id = $1 
+			ORDER BY ac.term_number
+		`, device.ID)
+		if err == nil {
+			defer codeRows.Close()
+
+			lockRows, err := db.Query(`
+				SELECT lock_date 
+				FROM lock_dates 
+				WHERE device_id = $1 
+				ORDER BY lock_date
+			`, device.ID)
+			if err == nil {
+				defer lockRows.Close()
+
+				codesByTerm := make(map[int]struct {
+					code   string
+					isUsed bool
+					usedAt *time.Time
+				})
+				usedCount := 0
+
+				for codeRows.Next() {
+					var termNumber int
+					var code string
+					var isUsed bool
+					var usedAt *time.Time
+					if err := codeRows.Scan(&termNumber, &code, &isUsed, &usedAt); err == nil {
+						codesByTerm[termNumber] = struct {
+							code   string
+							isUsed bool
+							usedAt *time.Time
+						}{code: code, isUsed: isUsed, usedAt: usedAt}
+						if isUsed {
+							usedCount++
+						}
+					}
+				}
+
+				termNumbers := make([]int, 0, len(codesByTerm))
+				for termNum := range codesByTerm {
+					termNumbers = append(termNumbers, termNum)
+				}
+				// Sort term numbers
+				for i := 0; i < len(termNumbers)-1; i++ {
+					for j := i + 1; j < len(termNumbers); j++ {
+						if termNumbers[i] > termNumbers[j] {
+							termNumbers[i], termNumbers[j] = termNumbers[j], termNumbers[i]
+						}
+					}
+				}
+
+				termIndex := 0
+				for lockRows.Next() {
+					var lockDate time.Time
+					if err := lockRows.Scan(&lockDate); err == nil {
+						if termIndex < len(termNumbers) {
+							termNumber := termNumbers[termIndex]
+							codeInfo := codesByTerm[termNumber]
+							var usedAtStr *string
+							if codeInfo.usedAt != nil {
+								formatted := codeInfo.usedAt.Format("2006-01-02 15:04:05")
+								usedAtStr = &formatted
+							}
+							termsWithDates = append(termsWithDates, TermWithLockDateAndCode{
+								Term:           termNumber,
+								LockDate:       lockDate.Format("2006-01-02"),
+								ActivationCode: codeInfo.code,
+								IsExpired:      codeInfo.isUsed,
+								IsUsed:         codeInfo.isUsed,
+								UsedAt:         usedAtStr,
+							})
+							termIndex++
+						}
+					}
+				}
+
+				device.UsedActivationCodes = usedCount
+				device.RemainingActivationCodes = len(codesByTerm) - usedCount
+			}
+		}
+
+		device.Terms = termsWithDates
+		device.TotalTerms = len(termsWithDates)
+
+		devices = append(devices, device)
+	}
+
+	response := AdminDevicesResponse{
+		Success: true,
+		Total:   len(devices),
+		Devices: devices,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func healthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -657,6 +877,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	router.HandleFunc("/api/remote-lock", setRemoteLock).Methods("POST")
 	router.HandleFunc("/api/check-lock", checkRemoteLock).Methods("GET")
 	router.HandleFunc("/api/unlock", unlockDevice).Methods("POST")
+	router.HandleFunc("/api/admin/devices", getAllDevices).Methods("GET")
 
 	// Recovery middleware to catch panics
 	recoveryMiddleware := func(next http.Handler) http.Handler {

@@ -180,6 +180,26 @@
 					"response": []
 				},
 				{
+					"name": "Get All Devices",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/devices",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"devices"
+							]
+						},
+						"description": "Get all registered devices with complete details. Returns device information, activation status, lock status, terms, lock dates, and activation codes. For admin panel."
+					},
+					"response": []
+				},
+				{
 					"name": "Health Check",
 					"request": {
 						"method": "GET",
