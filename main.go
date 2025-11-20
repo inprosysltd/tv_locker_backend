@@ -377,10 +377,8 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !isActive {
-		http.Error(w, "Device is not activated", http.StatusForbidden)
-		return
-	}
+	// Note: We return terms and lock dates even if device is not activated
+	// because TV needs to know when it will be locked
 
 	// Get terms with their corresponding lock dates
 	termsWithDates := make([]TermWithLockDate, 0)
@@ -420,9 +418,14 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	message := "Device is active"
+	if !isActive {
+		message = "Device is registered but not yet activated"
+	}
+
 	response := ActivationResponse{
 		Success: true,
-		Message: "Device is active",
+		Message: message,
 		Terms:   termsWithDates,
 	}
 
