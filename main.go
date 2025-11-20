@@ -79,9 +79,9 @@ type TermWithLockDateAndCode struct {
 }
 
 type ActivationResponse struct {
-	Success bool               `json:"success"`
-	Message string             `json:"message"`
-	Terms   []TermWithLockDate `json:"terms,omitempty"`
+	Success bool                      `json:"success"`
+	Message string                    `json:"message"`
+	Terms   []TermWithLockDateAndCode `json:"terms,omitempty"`
 }
 
 type RemoteLockRequest struct {
@@ -304,37 +304,54 @@ func activateDevice(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error activating device: %v", err)
 	}
 
-	// Get terms with their corresponding lock dates
-	// Join activation_codes with lock_dates based on term_number order
-	termsWithDates := make([]TermWithLockDate, 0)
+	// Get terms with their corresponding lock dates and activation codes
+	termsWithDates := make([]TermWithLockDateAndCode, 0)
 
-	// Get terms ordered by term_number
-	termRows, err := db.Query("SELECT term_number FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
+	// Get activation codes with term numbers ordered by term_number
+	codeRows, err := db.Query("SELECT term_number, code FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
 	if err == nil {
-		defer termRows.Close()
+		defer codeRows.Close()
 
 		// Get lock dates ordered by lock_date
 		lockRows, err := db.Query("SELECT lock_date FROM lock_dates WHERE device_id = $1 ORDER BY lock_date", deviceID)
 		if err == nil {
 			defer lockRows.Close()
 
-			lockDates := make([]time.Time, 0)
-			for lockRows.Next() {
-				var lockDate time.Time
-				if err := lockRows.Scan(&lockDate); err == nil {
-					lockDates = append(lockDates, lockDate)
+			// Store activation codes by term number
+			codesByTerm := make(map[int]string)
+			for codeRows.Next() {
+				var termNumber int
+				var code string
+				if err := codeRows.Scan(&termNumber, &code); err == nil {
+					codesByTerm[termNumber] = code
 				}
 			}
 
-			// Match terms with lock dates by index
+			// Match lock dates with terms and activation codes by index
 			termIndex := 0
-			for termRows.Next() {
-				var termNumber int
-				if err := termRows.Scan(&termNumber); err == nil {
-					if termIndex < len(lockDates) {
-						termsWithDates = append(termsWithDates, TermWithLockDate{
-							Term:     termNumber,
-							LockDate: lockDates[termIndex].Format("2006-01-02"),
+			termNumbers := make([]int, 0, len(codesByTerm))
+			for termNum := range codesByTerm {
+				termNumbers = append(termNumbers, termNum)
+			}
+			// Sort term numbers
+			for i := 0; i < len(termNumbers)-1; i++ {
+				for j := i + 1; j < len(termNumbers); j++ {
+					if termNumbers[i] > termNumbers[j] {
+						termNumbers[i], termNumbers[j] = termNumbers[j], termNumbers[i]
+					}
+				}
+			}
+
+			for lockRows.Next() {
+				var lockDate time.Time
+				if err := lockRows.Scan(&lockDate); err == nil {
+					if termIndex < len(termNumbers) {
+						termNumber := termNumbers[termIndex]
+						code := codesByTerm[termNumber]
+						termsWithDates = append(termsWithDates, TermWithLockDateAndCode{
+							Term:           termNumber,
+							LockDate:       lockDate.Format("2006-01-02"),
+							ActivationCode: code,
 						})
 						termIndex++
 					}
@@ -377,39 +394,66 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Note: We return terms and lock dates even if device is not activated
-	// because TV needs to know when it will be locked
+	// Automatically activate the device when TV calls this endpoint
+	if !isActive {
+		_, err = db.Exec("UPDATE devices SET is_active = true WHERE id = $1", deviceID)
+		if err != nil {
+			log.Printf("Error activating device: %v", err)
+			http.Error(w, "Failed to activate device", http.StatusInternalServerError)
+			return
+		}
+		isActive = true
+		log.Printf("Device %s activated via /api/check", serialNumber)
+	}
 
-	// Get terms with their corresponding lock dates
-	termsWithDates := make([]TermWithLockDate, 0)
+	// Get terms with their corresponding lock dates and activation codes
+	termsWithDates := make([]TermWithLockDateAndCode, 0)
 
-	// Get terms ordered by term_number
-	termRows, err := db.Query("SELECT term_number FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
+	// Get activation codes with term numbers ordered by term_number
+	codeRows, err := db.Query("SELECT term_number, code FROM activation_codes WHERE device_id = $1 ORDER BY term_number", deviceID)
 	if err == nil {
-		defer termRows.Close()
+		defer codeRows.Close()
 
 		// Get lock dates ordered by lock_date
 		lockRows, err := db.Query("SELECT lock_date FROM lock_dates WHERE device_id = $1 ORDER BY lock_date", deviceID)
 		if err == nil {
 			defer lockRows.Close()
 
-			lockDates := make([]time.Time, 0)
-			for lockRows.Next() {
-				var lockDate time.Time
-				if err := lockRows.Scan(&lockDate); err == nil {
-					lockDates = append(lockDates, lockDate)
+			// Store activation codes by term number
+			codesByTerm := make(map[int]string)
+			for codeRows.Next() {
+				var termNumber int
+				var code string
+				if err := codeRows.Scan(&termNumber, &code); err == nil {
+					codesByTerm[termNumber] = code
 				}
 			}
 
-			// Match terms with lock dates by index
+			// Match lock dates with terms and activation codes by index
 			termIndex := 0
-			for termRows.Next() {
-				var termNumber int
-				if err := termRows.Scan(&termNumber); err == nil {
-					if termIndex < len(lockDates) {
-						termsWithDates = append(termsWithDates, TermWithLockDate{
-							Term:     termNumber,
-							LockDate: lockDates[termIndex].Format("2006-01-02"),
+			termNumbers := make([]int, 0, len(codesByTerm))
+			for termNum := range codesByTerm {
+				termNumbers = append(termNumbers, termNum)
+			}
+			// Sort term numbers
+			for i := 0; i < len(termNumbers)-1; i++ {
+				for j := i + 1; j < len(termNumbers); j++ {
+					if termNumbers[i] > termNumbers[j] {
+						termNumbers[i], termNumbers[j] = termNumbers[j], termNumbers[i]
+					}
+				}
+			}
+
+			for lockRows.Next() {
+				var lockDate time.Time
+				if err := lockRows.Scan(&lockDate); err == nil {
+					if termIndex < len(termNumbers) {
+						termNumber := termNumbers[termIndex]
+						code := codesByTerm[termNumber]
+						termsWithDates = append(termsWithDates, TermWithLockDateAndCode{
+							Term:           termNumber,
+							LockDate:       lockDate.Format("2006-01-02"),
+							ActivationCode: code,
 						})
 						termIndex++
 					}
@@ -418,14 +462,9 @@ func checkActivation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	message := "Device is active"
-	if !isActive {
-		message = "Device is registered but not yet activated"
-	}
-
 	response := ActivationResponse{
 		Success: true,
-		Message: message,
+		Message: "Device activated successfully",
 		Terms:   termsWithDates,
 	}
 
