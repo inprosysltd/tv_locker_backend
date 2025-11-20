@@ -103,18 +103,25 @@ var dbInitError error
 
 func initDB() error {
 	dbOnce.Do(func() {
+		// Try DATABASE_URL first, then POSTGRES_URL as fallback
 		connStr := os.Getenv("DATABASE_URL")
 		if connStr == "" {
-			dbInitError = fmt.Errorf("DATABASE_URL environment variable is not set")
-			log.Println("ERROR:", dbInitError.Error())
+			connStr = os.Getenv("POSTGRES_URL")
+		}
+		if connStr == "" {
+			dbInitError = fmt.Errorf("DATABASE_URL or POSTGRES_URL environment variable is not set")
+			log.Println("ERROR: DATABASE_URL or POSTGRES_URL environment variable is not set")
+			log.Println("Available env vars:", os.Environ())
 			return
 		}
+
+		log.Printf("Connecting to database... (connection string length: %d)", len(connStr))
 
 		var err error
 		db, err = sql.Open("postgres", connStr)
 		if err != nil {
-			dbInitError = fmt.Errorf("Failed to connect to database: %v", err)
-			log.Println("ERROR:", dbInitError.Error())
+			dbInitError = fmt.Errorf("Failed to open database connection: %v", err)
+			log.Printf("ERROR: Failed to open database: %v", err)
 			return
 		}
 
@@ -123,13 +130,15 @@ func initDB() error {
 		db.SetMaxIdleConns(2)
 		db.SetConnMaxLifetime(5 * time.Minute)
 
+		log.Println("Pinging database...")
 		if err = db.Ping(); err != nil {
 			dbInitError = fmt.Errorf("Failed to ping database: %v", err)
-			log.Println("ERROR:", dbInitError.Error())
+			log.Printf("ERROR: Database ping failed: %v", err)
+			log.Printf("Connection string format: postgresql://[user]:[password]@[host]:[port]/[database]")
 			return
 		}
 
-		log.Println("Database connection established")
+		log.Println("✓ Database connection established successfully")
 	})
 	return dbInitError
 }
@@ -569,13 +578,17 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
 
 // Handler is the entry point for Vercel serverless functions
 func Handler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Request received: %s %s", r.Method, r.URL.Path)
+
 	// Initialize database connection (only once)
 	if err := initDB(); err != nil {
+		log.Printf("Database initialization error: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"error":   "Database connection failed",
 			"message": err.Error(),
+			"hint":    "Check Vercel environment variables: DATABASE_URL or POSTGRES_URL must be set",
 		})
 		return
 	}
