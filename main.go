@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"database/sql"
@@ -589,47 +589,4 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	handler := corsMiddleware(router)
 	handler.ServeHTTP(w, r)
-}
-
-// main function for local development
-func main() {
-	initDB()
-	defer db.Close()
-
-	r := mux.NewRouter()
-
-	// API routes
-	r.HandleFunc("/api/health", healthCheck).Methods("GET")
-	r.HandleFunc("/api/register", registerDevice).Methods("POST")
-	r.HandleFunc("/api/activate", activateDevice).Methods("POST")
-	r.HandleFunc("/api/check", checkActivation).Methods("GET")
-	r.HandleFunc("/api/remote-lock", setRemoteLock).Methods("POST")
-	r.HandleFunc("/api/check-lock", checkRemoteLock).Methods("GET")
-	r.HandleFunc("/api/unlock", unlockDevice).Methods("POST")
-
-	// CORS middleware
-	corsMiddleware := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-
-	handler := corsMiddleware(r)
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	log.Printf("Server starting on port %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
