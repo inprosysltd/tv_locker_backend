@@ -731,48 +731,55 @@ func getAllDevices(w http.ResponseWriter, r *http.Request) {
 
 		// Get terms with lock dates and activation codes
 		termsWithDates := make([]TermWithLockDateAndCode, 0)
+		usedCount := 0
+		totalCodes := 0
 
 		codeRows, err := db.Query(`
-			SELECT ac.term_number, ac.code, ac.is_used 
+			SELECT ac.term_number, ac.code, ac.is_used, ac.used_at 
 			FROM activation_codes ac 
 			WHERE ac.device_id = $1 
 			ORDER BY ac.term_number
 		`, device.ID)
-		if err == nil {
+		if err != nil {
+			log.Printf("Error fetching activation codes for device %s: %v", device.ID, err)
+		} else {
 			defer codeRows.Close()
 
+			codesByTerm := make(map[int]struct {
+				code   string
+				isUsed bool
+				usedAt *time.Time
+			})
+
+			for codeRows.Next() {
+				var termNumber int
+				var code string
+				var isUsed bool
+				var usedAt *time.Time
+				if err := codeRows.Scan(&termNumber, &code, &isUsed, &usedAt); err == nil {
+					codesByTerm[termNumber] = struct {
+						code   string
+						isUsed bool
+						usedAt *time.Time
+					}{code: code, isUsed: isUsed, usedAt: usedAt}
+					totalCodes++
+					if isUsed {
+						usedCount++
+					}
+				}
+			}
+
+			// Get lock dates
 			lockRows, err := db.Query(`
 				SELECT lock_date 
 				FROM lock_dates 
 				WHERE device_id = $1 
 				ORDER BY lock_date
 			`, device.ID)
-			if err == nil {
+			if err != nil {
+				log.Printf("Error fetching lock dates for device %s: %v", device.ID, err)
+			} else {
 				defer lockRows.Close()
-
-				codesByTerm := make(map[int]struct {
-					code   string
-					isUsed bool
-					usedAt *time.Time
-				})
-				usedCount := 0
-
-				for codeRows.Next() {
-					var termNumber int
-					var code string
-					var isUsed bool
-					var usedAt *time.Time
-					if err := codeRows.Scan(&termNumber, &code, &isUsed, &usedAt); err == nil {
-						codesByTerm[termNumber] = struct {
-							code   string
-							isUsed bool
-							usedAt *time.Time
-						}{code: code, isUsed: isUsed, usedAt: usedAt}
-						if isUsed {
-							usedCount++
-						}
-					}
-				}
 
 				termNumbers := make([]int, 0, len(codesByTerm))
 				for termNum := range codesByTerm {
@@ -811,10 +818,11 @@ func getAllDevices(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
-
-				device.UsedActivationCodes = usedCount
-				device.RemainingActivationCodes = len(codesByTerm) - usedCount
 			}
+
+			// Set counts even if there are no lock dates
+			device.UsedActivationCodes = usedCount
+			device.RemainingActivationCodes = totalCodes - usedCount
 		}
 
 		device.Terms = termsWithDates
